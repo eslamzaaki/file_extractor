@@ -1,169 +1,220 @@
-# File Extractor Server
+# File Extractor API
 
-A Node.js Express server for extracting text content from various file types (PDF, CSV, TXT, DOCX) via URL.
+A simple Flask REST API that extracts text content from files (PDF, DOC, DOCX, CSV, TXT) via URL.
 
 ## Features
 
-- Extract text from PDF files
-- Parse CSV files with headers
-- Read plain text files
-- Extract text from DOCX (Word) files
-- RESTful API with Express.js
-- TypeScript support
-- CORS enabled
+- Extract text content from PDF files
+- Extract text content from DOC and DOCX files
+- Extract content from CSV files
+- Extract content from TXT files
+- Support for both GET and POST requests
+- Automatic file type detection
 
 ## Installation
 
+1. Clone the repository:
 ```bash
-npm install
+git clone <your-repo-url>
+cd extractor-server
 ```
 
-## Development
-
-Run the development server with hot reload:
-
+2. Install dependencies:
 ```bash
-npm run dev
+pip install -r requirements.txt
 ```
 
-The server will start on `http://localhost:3000`
+## Running the Server
 
-## Production
-
-Build the TypeScript code:
-
+### Development Mode
 ```bash
-npm run build
+python app.py
 ```
 
-Start the production server:
+The server will start on `http://localhost:5000`
 
+### Production Mode (with Gunicorn)
 ```bash
-npm start
+gunicorn app:app
 ```
 
 ## API Endpoints
 
-### POST `/api/extract`
+### 1. Root Endpoint
+Get API information:
+```bash
+GET /
+```
 
-Extract content from a file URL.
+### 2. Health Check
+Check server status and supported formats:
+```bash
+GET /health
+```
 
-**Request Body:**
-```json
+### 3. Extract Content
+Extract content from a file URL:
+
+**GET Request:**
+```bash
+GET /extract?url=<file_url>
+```
+
+**POST Request:**
+```bash
+POST /extract
+Content-Type: application/json
+
 {
-  "fileUrl": "https://example.com/file.pdf"
+  "url": "<file_url>"
 }
 ```
 
-**Success Response:**
+## Usage Examples
+
+### Extract from PDF (GET)
+```bash
+curl -X GET "http://localhost:5000/extract?url=https://example.com/document.pdf"
+```
+
+### Extract from CSV (POST)
+```bash
+curl -X POST http://localhost:5000/extract \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://example.com/data.csv"}'
+```
+
+### Extract from TXT file
+```bash
+curl -X GET "http://localhost:5000/extract?url=https://example.com/file.txt"
+```
+
+### Extract from DOCX file
+```bash
+curl -X POST http://localhost:5000/extract \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://example.com/document.docx"}'
+```
+
+## Response Format
+
+### Success Response
 ```json
 {
   "success": true,
-  "extracted": {
-    "type": "pdf",
-    "text": "Extracted text content..."
-  }
+  "content": "Extracted text content here...",
+  "file_type": ".pdf",
+  "content_length": 1234
 }
 ```
 
-**Error Response:**
+### Error Response
 ```json
 {
-  "error": "Error message"
-}
-```
-
-### GET `/health`
-
-Health check endpoint.
-
-**Response:**
-```json
-{
-  "status": "ok",
-  "message": "File Extractor API is running"
+  "error": "Error message here"
 }
 ```
 
 ## Supported File Types
 
-- **PDF** (`.pdf`) - Extracts text using pdf-parse
-- **CSV** (`.csv`) - Parses with headers using papaparse
-- **TXT** (`.txt`) - Plain text extraction
-- **DOCX** (`.docx`) - Extracts text using mammoth
+- **PDF** (`.pdf`) - Extracts text using PyPDF2
+- **DOCX** (`.docx`) - Extracts text using python-docx
+- **DOC** (`.doc`) - Extracts text using docx2python
+- **CSV** (`.csv`) - Extracts all rows as text
+- **TXT** (`.txt`) - Extracts plain text content
 
-## Example Usage
+## Testing
 
-### Using curl
-
+Run the test suite:
 ```bash
-curl -X POST http://localhost:3000/api/extract \
-  -H "Content-Type: application/json" \
-  -d '{"fileUrl": "https://example.com/file.pdf"}'
+pytest
 ```
 
-### Using fetch (JavaScript)
+Run with verbose output:
+```bash
+pytest -v
+```
+
+## Deployment to Render
+
+This project includes a `render.yaml` configuration file for easy deployment to Render.
+
+1. Push your code to GitHub/GitLab
+2. In Render dashboard, create a new Web Service
+3. Connect your repository
+4. Render will automatically detect the `render.yaml` file
+5. The service will be deployed automatically
+
+The `render.yaml` file configures:
+- Python environment
+- Build command: `pip install -r requirements.txt`
+- Start command: `gunicorn app:app`
+- Free tier plan
+
+## Environment Variables
+
+- `PORT` - Server port (default: 5000)
+
+## Error Handling
+
+The API handles various error cases:
+- Missing URL parameter
+- Invalid or unreachable URLs
+- Unsupported file types
+- Extraction failures
+- HTTP errors (404, 500, etc.)
+
+## Example with Python
+
+```python
+import requests
+
+# Extract content from a file URL
+response = requests.post(
+    'http://localhost:5000/extract',
+    json={'url': 'https://example.com/document.pdf'}
+)
+
+if response.status_code == 200:
+    data = response.json()
+    print(f"File type: {data['file_type']}")
+    print(f"Content length: {data['content_length']}")
+    print(f"Content:\n{data['content']}")
+else:
+    print(f"Error: {response.json()['error']}")
+```
+
+## Example with JavaScript/Node.js
 
 ```javascript
-const response = await fetch('http://localhost:3000/api/extract', {
-  method: 'POST',
-  headers: {
-    'Content-Type': 'application/json',
-  },
-  body: JSON.stringify({
-    fileUrl: 'https://example.com/file.pdf'
-  })
-});
+const fetch = require('node-fetch');
 
-const data = await response.json();
-console.log(data);
+async function extractFile(url) {
+  const response = await fetch('http://localhost:5000/extract', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ url: url })
+  });
+
+  const data = await response.json();
+  
+  if (data.success) {
+    console.log('File type:', data.file_type);
+    console.log('Content:', data.content);
+  } else {
+    console.error('Error:', data.error);
+  }
+}
+
+extractFile('https://example.com/document.pdf');
 ```
-
-## Project Structure
-
-```
-extractor-server/
-├── server.ts          # Main Express server file
-├── package.json       # Dependencies and scripts
-├── tsconfig.json      # TypeScript configuration
-├── public/            # Static files (test.html)
-└── dist/              # Compiled JavaScript (generated)
-```
-
-## Technologies
-
-- **Express.js** - Web framework
-- **TypeScript** - Type safety
-- **pdf-parse** - PDF text extraction
-- **papaparse** - CSV parsing
-- **mammoth** - DOCX text extraction
-- **CORS** - Cross-origin resource sharing
-
-## Deployment
-
-### Deploy to Vercel
-
-This Express server is configured for easy deployment to Vercel:
-
-1. **Using Vercel CLI:**
-   ```bash
-   npm i -g vercel
-   vercel
-   ```
-
-2. **Using GitHub:**
-   - Push code to GitHub
-   - Import repository in Vercel dashboard
-   - Vercel will auto-detect and deploy
-
-See [VERCEL_DEPLOY.md](./VERCEL_DEPLOY.md) for detailed deployment instructions.
-
-### Configuration Files
-
-- `vercel.json` - Vercel serverless function configuration
-- `api/index.ts` - Serverless function entry point
-- `server.ts` - Express app (works both locally and on Vercel)
 
 ## License
 
 MIT
+
+## Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
