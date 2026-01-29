@@ -1,8 +1,7 @@
 """
-File Extractor API with security enhancements
+Improved version of app.py with security enhancements and better practices
 """
 from flask import Flask, request, jsonify
-from functools import wraps
 import requests
 import os
 import tempfile
@@ -11,12 +10,6 @@ import csv
 import logging
 from urllib.parse import urlparse
 from functools import lru_cache
-from dotenv import load_dotenv
-from flask_limiter import Limiter
-from flask_limiter.util import get_remote_address
-
-# Load environment variables
-load_dotenv()
 
 # Configure logging
 logging.basicConfig(
@@ -34,22 +27,9 @@ def get_config():
         'REQUEST_TIMEOUT': int(os.environ.get('REQUEST_TIMEOUT', 30)),
         'ALLOWED_SCHEMES': ['http', 'https'],
         'BLOCKED_HOSTS': ['localhost', '127.0.0.1', '0.0.0.0', '::1', '169.254.169.254'],  # AWS metadata
-        'FILE_EXTRACTOR_KEY': os.environ.get('FILE_EXTRACTOR_KEY', ''),
     }
 
 CONFIG = get_config()
-
-# Initialize Flask app
-app = Flask(__name__)
-app.config['MAX_CONTENT_LENGTH'] = CONFIG['MAX_FILE_SIZE'] * 2  # Allow larger responses
-
-# Initialize rate limiter
-limiter = Limiter(
-    app=app,
-    key_func=get_remote_address,
-    default_limits=["100 per hour", "10 per minute"],
-    storage_uri="memory://"
-)
 
 # PDF extraction
 try:
@@ -75,54 +55,11 @@ except ImportError:
     DOC_AVAILABLE = False
     logger.warning("docx2python not available. DOC extraction disabled.")
 
+app = Flask(__name__)
+app.config['MAX_CONTENT_LENGTH'] = CONFIG['MAX_FILE_SIZE'] * 2  # Allow larger responses
+
 # Supported file types mapping
 SUPPORTED_EXTENSIONS = ['.pdf', '.doc', '.docx', '.csv', '.txt']
-
-def require_api_key(f):
-    """
-    Decorator to require API key authentication
-    
-    Args:
-        f: Function to protect
-        
-    Returns:
-        Decorated function
-    """
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        # Get API key from environment
-        api_key = CONFIG.get('FILE_EXTRACTOR_KEY', '')
-        
-        # If no API key is configured, skip authentication
-        if not api_key:
-            logger.warning("No API key configured. Authentication disabled.")
-            return f(*args, **kwargs)
-        
-        # Get Authorization header
-        auth_header = request.headers.get('Authorization', '')
-        
-        # Check if Authorization header is present
-        if not auth_header:
-            logger.warning("Missing Authorization header")
-            return jsonify({
-                'error': 'Missing Authorization header. Please provide API key in Authorization header.'
-            }), 401
-        
-        # Extract API key from header (supports "Bearer <key>" or just "<key>")
-        if auth_header.startswith('Bearer '):
-            provided_key = auth_header[7:]  # Remove "Bearer " prefix
-        else:
-            provided_key = auth_header
-        
-        # Validate API key
-        if provided_key != api_key:
-            logger.warning(f"Invalid API key attempt from {request.remote_addr}")
-            return jsonify({
-                'error': 'Invalid API key'
-            }), 401
-        
-        return f(*args, **kwargs)
-    return decorated_function
 
 def validate_url(url):
     """
@@ -392,8 +329,6 @@ def try_extract_with_fallback(file_path, file_extension=None):
     return None, file_extension, "Could not extract content with any supported method"
 
 @app.route('/extract', methods=['POST', 'GET'])
-@limiter.limit("5 per minute")  # Stricter rate limit for extract endpoint
-@require_api_key
 def extract():
     """Extract content from file URL"""
     file_path = None
@@ -470,8 +405,7 @@ def health():
         'pdf_support': PDF_AVAILABLE,
         'docx_support': DOCX_AVAILABLE,
         'doc_support': DOC_AVAILABLE,
-        'max_file_size_mb': CONFIG['MAX_FILE_SIZE'] / (1024 * 1024),
-        'auth_required': bool(CONFIG.get('FILE_EXTRACTOR_KEY', ''))
+        'max_file_size_mb': CONFIG['MAX_FILE_SIZE'] / (1024 * 1024)
     }), 200
 
 @app.route('/', methods=['GET'])
@@ -480,12 +414,11 @@ def index():
     return jsonify({
         'message': 'File Extractor API',
         'endpoints': {
-            '/extract': 'Extract content from file URL (GET or POST with url parameter) - Requires API key',
+            '/extract': 'Extract content from file URL (GET or POST with url parameter)',
             '/health': 'Health check endpoint'
         },
         'supported_formats': SUPPORTED_EXTENSIONS,
-        'max_file_size_mb': CONFIG['MAX_FILE_SIZE'] / (1024 * 1024),
-        'authentication': 'API key required in Authorization header (Bearer <key> or just <key>)'
+        'max_file_size_mb': CONFIG['MAX_FILE_SIZE'] / (1024 * 1024)
     }), 200
 
 if __name__ == '__main__':
