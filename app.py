@@ -6,6 +6,8 @@ from functools import wraps
 import requests
 import os
 import tempfile
+import base64
+import binascii
 from pathlib import Path
 import csv
 import logging
@@ -53,11 +55,11 @@ limiter = Limiter(
 
 # PDF extraction
 try:
-    import PyPDF2
+    import pypdf
     PDF_AVAILABLE = True
 except ImportError:
     PDF_AVAILABLE = False
-    logger.warning("PyPDF2 not available. PDF extraction disabled.")
+    logger.warning("pypdf not available. PDF extraction disabled.")
 
 # DOCX extraction
 try:
@@ -191,7 +193,7 @@ def extract_pdf(file_path):
     try:
         text_content = []
         with open(file_path, 'rb') as file:
-            pdf_reader = PyPDF2.PdfReader(file)
+            pdf_reader = pypdf.PdfReader(file)
             for page in pdf_reader.pages:
                 text = page.extract_text()
                 if text:
@@ -346,6 +348,35 @@ def download_file(url):
         logger.error(f"Unexpected download error: {str(e)}")
         return None, None, f"Unexpected error: {str(e)}"
 
+def resolve_file_extension(filename=None, content_type=None):
+    """
+    Resolve file extension from filename or Content-Type.
+    
+    Args:
+        filename: Original file name (optional)
+        content_type: MIME type string (optional)
+        
+    Returns:
+        str | None: Lowercase extension including dot, or None
+    """
+    if filename:
+        suffix = Path(filename).suffix.lower()
+        if suffix:
+            return suffix
+    
+    if content_type:
+        content_type_lower = content_type.lower()
+        if 'pdf' in content_type_lower:
+            return '.pdf'
+        if 'word' in content_type_lower or 'document' in content_type_lower:
+            return '.docx' if 'openxml' in content_type_lower else '.doc'
+        if 'csv' in content_type_lower or 'text/csv' in content_type_lower:
+            return '.csv'
+        if 'text/plain' in content_type_lower:
+            return '.txt'
+    
+    return None
+
 # Extraction function mapping
 EXTRACTION_FUNCTIONS = {
     '.pdf': extract_pdf,
@@ -392,7 +423,7 @@ def try_extract_with_fallback(file_path, file_extension=None):
     return None, file_extension, "Could not extract content with any supported method"
 
 @app.route('/extract', methods=['POST', 'GET'])
-@limiter.limit("5 per minute")  # Stricter rate limit for extract endpoint
+@limiter.limit("30 per minute")
 @require_api_key
 def extract():
     """Extract content from file URL"""
@@ -462,6 +493,100 @@ def extract():
             except Exception as e:
                 logger.warning(f"Failed to delete temp file {file_path}: {str(e)}")
 
+@app.route('/extract-base64', methods=['POST'])
+@limiter.limit("30 per minute")
+@require_api_key
+def extract_base64():
+    """Extract content from base64-encoded file data"""
+    file_path = None
+    try:
+        data = request.get_json() or {}
+        base64_input = data.get('base64')
+        filename = data.get('filename')
+        content_type = data.get('contentType')
+        
+        if not base64_input or not isinstance(base64_input, str):
+            logger.warning("Extraction request without valid base64 payload")
+            return jsonify({
+                'error': 'Missing base64 data. Provide "base64" in JSON body.'
+            }), 400
+        
+        if len(base64_input) > CONFIG['MAX_FILE_SIZE'] * 2:
+            return jsonify({
+                'error': f'Base64 payload too large. Maximum file size: {CONFIG["MAX_FILE_SIZE"] / (1024*1024):.1f}MB'
+            }), 400
+        
+        # Support data URLs like: data:<mime>;base64,<payload>
+        if ',' in base64_input and base64_input.strip().lower().startswith('data:'):
+            try:
+                header, payload = base64_input.split(',', 1)
+                base64_input = payload.strip()
+                if ';' in header and ':' in header:
+                    detected_mime = header.split(':', 1)[1].split(';', 1)[0].strip()
+                    if detected_mime and not content_type:
+                        content_type = detected_mime
+            except ValueError:
+                return jsonify({'error': 'Invalid data URL format for base64 payload'}), 400
+        
+        try:
+            file_bytes = base64.b64decode(base64_input, validate=True)
+        except binascii.Error:
+            return jsonify({'error': 'Invalid base64 data'}), 400
+        
+        if not file_bytes:
+            return jsonify({'error': 'Decoded file is empty'}), 400
+        
+        if len(file_bytes) > CONFIG['MAX_FILE_SIZE']:
+            return jsonify({
+                'error': f'File too large. Maximum size: {CONFIG["MAX_FILE_SIZE"] / (1024*1024):.1f}MB'
+            }), 400
+        
+        file_extension = resolve_file_extension(filename, content_type)
+        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=file_extension or '.tmp')
+        try:
+            temp_file.write(file_bytes)
+        finally:
+            temp_file.close()
+        
+        file_path = temp_file.name
+        logger.info(
+            f"Base64 extraction request. filename={filename}, content_type={content_type}, "
+            f"bytes={len(file_bytes)}, extension={file_extension}"
+        )
+        
+        content, detected_ext, extract_error = try_extract_with_fallback(file_path, file_extension)
+        
+        if extract_error:
+            logger.error(f"Base64 extraction failed: {extract_error}")
+            return jsonify({
+                'error': f'Failed to extract content: {extract_error}',
+                'file_type': detected_ext or file_extension
+            }), 400
+        
+        if content is None:
+            return jsonify({
+                'error': 'Unsupported file type or failed to extract content',
+                'file_type': detected_ext or file_extension,
+                'supported_types': SUPPORTED_EXTENSIONS
+            }), 400
+        
+        return jsonify({
+            'success': True,
+            'content': content,
+            'file_type': detected_ext or file_extension,
+            'content_length': len(content)
+        }), 200
+    
+    except Exception as e:
+        logger.error(f"Unexpected error in extract-base64 endpoint: {str(e)}", exc_info=True)
+        return jsonify({'error': 'Internal server error'}), 500
+    finally:
+        if file_path and os.path.exists(file_path):
+            try:
+                os.unlink(file_path)
+            except Exception as e:
+                logger.warning(f"Failed to delete temp file {file_path}: {str(e)}")
+
 @app.route('/health', methods=['GET'])
 def health():
     """Health check endpoint"""
@@ -481,6 +606,7 @@ def index():
         'message': 'File Extractor API',
         'endpoints': {
             '/extract': 'Extract content from file URL (GET or POST with url parameter) - Requires API key',
+            '/extract-base64': 'Extract content from base64 file payload (POST with base64, optional filename/contentType) - Requires API key',
             '/health': 'Health check endpoint'
         },
         'supported_formats': SUPPORTED_EXTENSIONS,

@@ -231,7 +231,7 @@ curl -X POST http://localhost:5000/extract \
 
 ## Supported File Types
 
-- **PDF** (`.pdf`) - Extracts text using PyPDF2
+- **PDF** (`.pdf`) - Extracts text using pypdf
 - **DOCX** (`.docx`) - Extracts text using python-docx
 - **DOC** (`.doc`) - Extracts text using docx2python
 - **CSV** (`.csv`) - Extracts all rows as text
